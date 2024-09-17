@@ -293,7 +293,7 @@ func (b *Broker) startConsumers() error {
 		b.wg.Add(1)
 		go func(c *Consumer) {
 			defer b.wg.Done()
-			if err := c.run(); err != nil {
+			if err := c.start(); err != nil {
 				b.logger.Printf("Consumer '%s' stopped: %v", c.name, err)
 			}
 		}(consumer)
@@ -441,31 +441,6 @@ func (c *Consumer) QoS(prefetchCount int, opts ...func(*QoSOptions)) *Consumer {
 		opt(&c.qosOpts)
 	}
 	return c
-}
-
-// run manages the consumer's lifecycle, reconnecting on channel closures.
-func (c *Consumer) run() error {
-	backoffInterval := c.broker.backoffConfig.InitialInterval
-	for {
-		select {
-		case <-c.broker.ctx.Done():
-			return nil
-		default:
-			if err := c.start(); err != nil {
-				c.broker.logger.Printf("Consumer '%s' error: %v", c.name, err)
-				backoffInterval = c.broker.nextBackoff(backoffInterval)
-				c.broker.logger.Printf("Consumer '%s' reconnecting in %v", c.name, backoffInterval)
-				select {
-				case <-c.broker.ctx.Done():
-					return nil
-				case <-time.After(backoffInterval):
-					continue
-				}
-			}
-			// Reset backoff interval upon successful channel start
-			backoffInterval = c.broker.backoffConfig.InitialInterval
-		}
-	}
 }
 
 // start initializes the consumer's channel and starts consuming messages.

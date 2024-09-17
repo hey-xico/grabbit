@@ -15,7 +15,6 @@ import (
 
 const (
 	rabbitMQURL         = "amqp://guest:guest@localhost:6666/"
-	reconnectInterval   = 5 * time.Second
 	messagePublishDelay = 5 * time.Millisecond
 )
 
@@ -37,14 +36,18 @@ func main() {
 		TLSClientConfig: tlsConfig,
 		// Other configurations like SASL mechanisms can be set here
 	}
-	
+	broker.SetBackoffConfig(grabbit.BackoffConfig{
+		InitialInterval: 2 * time.Second,
+		MaxInterval:     1 * time.Minute,
+		Multiplier:      2.0,
+	})
 	broker.SetConfig(amqpConfig)
 	broker.Use(loggingMiddleware, recoveryMiddleware)
 	
 	setupConsumers(broker)
 	
 	go func() {
-		if err := broker.Start(rabbitMQURL, reconnectInterval); err != nil {
+		if err := broker.Start(rabbitMQURL); err != nil {
 			log.Fatalf("Failed to start broker: %v", err)
 		}
 	}()
@@ -99,7 +102,12 @@ func setupConsumers(broker *grabbit.Broker) {
 }
 
 func startPublishing(ctx context.Context) {
-	connection, err := amqp.Dial(rabbitMQURL)
+	connection, err := amqp.DialConfig(rabbitMQURL, amqp.Config{
+		Properties: amqp.Table{
+			//	connection name
+			"connection_name": "publisher",
+		},
+	})
 	if err != nil {
 		log.Fatalf("Error connecting to RabbitMQ: %v", err)
 	}
@@ -179,19 +187,19 @@ func recoveryMiddleware(next grabbit.HandlerFunc) grabbit.HandlerFunc {
 }
 
 func fanoutHandler(ctx *grabbit.Context) error {
-	fmt.Printf("Received message: %s\n", string(ctx.Body()))
+	//fmt.Printf("Received message: %s\n", string(ctx.Body()))
 	
 	return nil
 }
 
 func directHandler(ctx *grabbit.Context) error {
-	fmt.Printf("Received message: %s\n", string(ctx.Body()))
+	//fmt.Printf("Received message: %s\n", string(ctx.Body()))
 	return nil
 }
 
 func topicHandler(consumerName string) grabbit.HandlerFunc {
 	return func(ctx *grabbit.Context) error {
-		fmt.Printf("Received message: %s\n", string(ctx.Body()))
+		//fmt.Printf("Received message: %s\n", string(ctx.Body()))
 		
 		return nil
 		
