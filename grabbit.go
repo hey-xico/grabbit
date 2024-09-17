@@ -76,9 +76,8 @@ type ConsumerOptions struct {
 
 // QoSOptions defines the Quality of Service options for a consumer.
 type QoSOptions struct {
-	PrefetchCount int  // Messages to prefetch.
-	PrefetchSize  int  // Size in bytes to prefetch.
-	Global        bool // Apply to entire channel.
+	PrefetchCount int // Messages to prefetch.
+	PrefetchSize  int // Size in bytes to prefetch.
 }
 
 // HandlerFunc defines the handler function type for processing messages.
@@ -90,7 +89,7 @@ type MiddlewareFunc func(HandlerFunc) HandlerFunc
 // Logger is an interface that represents a logger.
 // It is compatible with the standard library's log.Logger.
 type Logger interface {
-	Printf(format string, v ...interface{})
+	Printf(format string, v ...any)
 }
 
 // Consumer represents a message consumer with its configurations.
@@ -251,13 +250,10 @@ func (b *Broker) connect() error {
 // startConsumers initializes and starts all consumers managed by the broker.
 func (b *Broker) startConsumers() error {
 	errorChan := make(chan error, len(b.consumers))
-	var wg sync.WaitGroup
 	
 	for _, consumer := range b.consumers {
-		wg.Add(1)
 		b.wg.Add(1)
 		go func(c *Consumer) {
-			defer wg.Done()
 			defer b.wg.Done()
 			if err := c.validateConfig(); err != nil {
 				errorChan <- fmt.Errorf("consumer '%s' configuration error: %w", c.name, err)
@@ -269,7 +265,7 @@ func (b *Broker) startConsumers() error {
 		}(consumer)
 	}
 	
-	wg.Wait()
+	b.wg.Wait()
 	close(errorChan)
 	
 	var err error
@@ -484,7 +480,7 @@ func (c *Consumer) start() error {
 		err = channel.Qos(
 			c.qosOpts.PrefetchCount,
 			c.qosOpts.PrefetchSize,
-			c.qosOpts.Global,
+			false,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to set QoS: %w", err)
@@ -512,17 +508,21 @@ func (c *Consumer) start() error {
 		select {
 		case <-c.broker.ctx.Done():
 			return nil
-		case err := <-chClosed:
-			if err != nil {
-				return fmt.Errorf("channel closed: %w", err)
+		case err, ok := <-chClosed:
+			if !ok || err == nil {
+				return errors.New("channel closed")
 			}
-			return errors.New("channel closed")
+			return fmt.Errorf("channel closed: %w", err)
 		case d, ok := <-deliveries:
 			if !ok {
 				return errors.New("message channel closed")
 			}
 			
-			ctx := &Context{Delivery: d}
+			ctx := &Context{
+				Context:  c.broker.ctx,
+				Delivery: d,
+				logger:   c.broker.logger,
+			}
 			if err := handler(ctx); err != nil {
 				if !c.consumerOpts.AutoAck {
 					if nackErr := ctx.Nack(false, true); nackErr != nil {
@@ -543,7 +543,10 @@ func (c *Consumer) start() error {
 
 // Context provides methods to interact with the incoming message.
 type Context struct {
+	context.Context
 	Delivery amqp.Delivery
+	data     map[string]any
+	logger   Logger
 }
 
 // Ack acknowledges the message, indicating successful processing.
@@ -571,8 +574,22 @@ func (c *Context) Body() []byte {
 }
 
 // Header returns the value of the specified header from the message.
-func (c *Context) Header(key string) interface{} {
+func (c *Context) Header(key string) any {
 	return c.Delivery.Headers[key]
+}
+
+// Set sets a key-value pair in the context.
+func (c *Context) Set(key string, value any) {
+	if c.data == nil {
+		c.data = make(map[string]any)
+	}
+	c.data[key] = value
+}
+
+// Get retrieves a value from the context.
+func (c *Context) Get(key string) (any, bool) {
+	value, exists := c.data[key]
+	return value, exists
 }
 
 // Functional options for ExchangeOptions
@@ -722,12 +739,5 @@ func WithConsumerArgs(args amqp.Table) func(*ConsumerOptions) {
 func WithQoSPrefetchSize(prefetchSize int) func(*QoSOptions) {
 	return func(opts *QoSOptions) {
 		opts.PrefetchSize = prefetchSize
-	}
-}
-
-// WithQoSGlobal sets the Global option for QoSOptions.
-func WithQoSGlobal(global bool) func(*QoSOptions) {
-	return func(opts *QoSOptions) {
-		opts.Global = global
 	}
 }
