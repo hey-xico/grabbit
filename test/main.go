@@ -31,6 +31,20 @@ func main() {
 		// Provide RootCAs, Certificates, etc.
 	}
 	
+	// Listen for connection state changes
+	//go func() {
+	//	for status := range broker.StatusChan {
+	//		switch status {
+	//		case grabbit.StatusDisconnected:
+	//			log.Println("Broker disconnected")
+	//		case grabbit.StatusConnecting:
+	//			log.Println("Broker connecting...")
+	//		case grabbit.StatusConnected:
+	//			log.Println("Broker connected")
+	//		}
+	//	}
+	//}()
+	
 	// Set the AMQP configuration with TLS
 	amqpConfig := amqp.Config{
 		TLSClientConfig: tlsConfig,

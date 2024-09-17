@@ -88,6 +88,15 @@ type MiddlewareFunc func(HandlerFunc) HandlerFunc
 // ErrorHandler is a function type for handling errors.
 type ErrorHandler func(error)
 
+// BrokerStatus represents the connection status of the broker.
+type BrokerStatus int
+
+const (
+	StatusDisconnected BrokerStatus = iota // The broker is disconnected.
+	StatusConnecting                       // The broker is attempting to connect.
+	StatusConnected                        // The broker is connected.
+)
+
 // Consumer represents a message consumer with its configurations.
 type Consumer struct {
 	exchangeOpts ExchangeOptions
@@ -114,6 +123,10 @@ type Broker struct {
 	config        amqp.Config
 	backoffConfig BackoffConfig
 	errorHandler  ErrorHandler
+	
+	status      BrokerStatus
+	statusMutex sync.RWMutex
+	StatusChan  chan BrokerStatus
 }
 
 // BackoffConfig defines the configuration for exponential backoff.
@@ -141,6 +154,8 @@ func NewBroker(ctx context.Context) *Broker {
 			MaxInterval:     30 * time.Second,
 			Multiplier:      2.0,
 		},
+		status:     StatusDisconnected,
+		StatusChan: make(chan BrokerStatus, 1),
 	}
 }
 
@@ -192,6 +207,8 @@ func (b *Broker) Start(url string) error {
 			b.closeConnection()
 			return b.ctx.Err()
 		default:
+			b.setStatus(StatusConnecting)
+			
 			// Attempt to connect
 			if err := b.connect(); err != nil {
 				b.handleError(fmt.Errorf("failed to connect: %w", err))
@@ -207,11 +224,14 @@ func (b *Broker) Start(url string) error {
 			// Reset backoff interval upon successful connection
 			backoffInterval = b.backoffConfig.InitialInterval
 			
+			b.setStatus(StatusConnected)
+			
 			// Start consumers
 			if err := b.startConsumers(); err != nil {
 				b.handleError(fmt.Errorf("failed to start consumers: %w", err))
 				b.closeConnection()
 				backoffInterval = b.nextBackoff(backoffInterval)
+				b.setStatus(StatusDisconnected)
 				select {
 				case <-b.ctx.Done():
 					return b.ctx.Err()
@@ -233,6 +253,7 @@ func (b *Broker) Start(url string) error {
 				if err != nil {
 					b.handleError(fmt.Errorf("connection closed: %w", err))
 				}
+				b.setStatus(StatusDisconnected)
 				b.closeConnection()
 				// Wait for consumers to stop before reconnecting
 				b.wg.Wait()
@@ -326,6 +347,35 @@ func (b *Broker) handleError(err error) {
 	if b.errorHandler != nil {
 		b.errorHandler(err)
 	}
+}
+
+// setStatus updates the broker's status and notifies via StatusChan.
+func (b *Broker) setStatus(status BrokerStatus) {
+	b.statusMutex.Lock()
+	b.status = status
+	b.statusMutex.Unlock()
+	
+	// Non-blocking status update to prevent blocking the broker
+	select {
+	case b.StatusChan <- status:
+	default:
+		select {
+		case <-b.StatusChan: // Remove the old status
+		default:
+		}
+		
+		select {
+		case b.StatusChan <- status:
+		default:
+		}
+	}
+}
+
+// GetStatus returns the current status of the broker.
+func (b *Broker) GetStatus() BrokerStatus {
+	b.statusMutex.RLock()
+	defer b.statusMutex.RUnlock()
+	return b.status
 }
 
 // applyMiddleware applies the middleware stack to a handler.
