@@ -666,6 +666,26 @@ func WithQueueArgs(args amqp.Table) func(*QueueOptions) {
 	}
 }
 
+// WithQueueDeadLetterExchange sets the DeadLetterExchange option for QueueOptions.
+func WithQueueDeadLetterExchange(exchange string) func(*QueueOptions) {
+	return func(opts *QueueOptions) {
+		if opts.Args == nil {
+			opts.Args = amqp.Table{}
+		}
+		opts.Args["x-dead-letter-exchange"] = exchange
+	}
+}
+
+// WithQueueMaxRetries sets the MaxRetries option for QueueOptions.
+func WithQueueMaxRetries(max int) func(*QueueOptions) {
+	return func(opts *QueueOptions) {
+		if opts.Args == nil {
+			opts.Args = amqp.Table{}
+		}
+		opts.Args["x-max-length"] = max
+	}
+}
+
 // Functional options for BindingOptions
 
 // WithBindingHeaders sets the Headers option for BindingOptions.
