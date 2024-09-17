@@ -1,3 +1,13 @@
+// Package grabbit provides a simplified and idiomatic wrapper around the RabbitMQ Go client,
+// making it easier to consume messages using common AMQP patterns.
+//
+// Key features include:
+// - Easy configuration of exchanges, queues, and bindings.
+// - Middleware support for reusable message processing logic.
+// - Context integration for graceful shutdowns.
+// - Customizable error handling.
+// - Support for advanced connection settings, including TLS.
+// - Broker state management and metrics tracking.
 package grabbit
 
 import (
