@@ -107,17 +107,24 @@ type Consumer struct {
 
 // Broker represents the message broker that manages connections and consumers.
 type Broker struct {
-	url               string
-	reconnectInterval time.Duration
-	conn              *amqp.Connection
-	connMutex         sync.RWMutex
-	middlewares       []MiddlewareFunc
-	consumers         []*Consumer
-	ctx               context.Context
-	cancel            context.CancelFunc
-	wg                sync.WaitGroup
-	logger            Logger
-	config            amqp.Config
+	url           string
+	conn          *amqp.Connection
+	connMutex     sync.RWMutex
+	middlewares   []MiddlewareFunc
+	consumers     []*Consumer
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	logger        Logger
+	config        amqp.Config
+	backoffConfig BackoffConfig
+}
+
+// BackoffConfig defines the configuration for exponential backoff.
+type BackoffConfig struct {
+	InitialInterval time.Duration // Initial wait time before reconnecting.
+	MaxInterval     time.Duration // Maximum wait time between reconnections.
+	Multiplier      float64       // Multiplier for exponential backoff.
 }
 
 // NewBroker creates a new Broker instance with the provided application context.
@@ -134,6 +141,11 @@ func NewBroker(ctx context.Context) *Broker {
 		cancel:      cancel,
 		logger:      log.Default(), // Use the standard logger by default
 		config:      amqp.Config{}, // Default AMQP config
+		backoffConfig: BackoffConfig{
+			InitialInterval: 1 * time.Second,
+			MaxInterval:     30 * time.Second,
+			Multiplier:      2.0,
+		},
 	}
 }
 
@@ -149,6 +161,11 @@ func (b *Broker) SetLogger(logger Logger) {
 // This allows users to customize connection settings, including TLS.
 func (b *Broker) SetConfig(config amqp.Config) {
 	b.config = config
+}
+
+// SetBackoffConfig sets the backoff configuration for reconnections.
+func (b *Broker) SetBackoffConfig(config BackoffConfig) {
+	b.backoffConfig = config
 }
 
 // Use adds middleware(s) to the Broker.
@@ -171,9 +188,9 @@ func (b *Broker) Consumer(name string, handler HandlerFunc) *Consumer {
 // Start establishes the connection to the RabbitMQ server and starts all consumers.
 // It will attempt to reconnect and restart consumers upon connection loss.
 // It listens for cancellation signals from the application's context.
-func (b *Broker) Start(url string, reconnectInterval time.Duration) error {
+func (b *Broker) Start(url string) error {
 	b.url = url
-	b.reconnectInterval = reconnectInterval
+	backoffInterval := b.backoffConfig.InitialInterval
 	
 	for {
 		select {
@@ -185,22 +202,29 @@ func (b *Broker) Start(url string, reconnectInterval time.Duration) error {
 			// Attempt to connect
 			if err := b.connect(); err != nil {
 				b.logger.Printf("Failed to connect: %v", err)
+				backoffInterval = b.nextBackoff(backoffInterval)
+				b.logger.Printf("Reconnecting in %v", backoffInterval)
 				select {
 				case <-b.ctx.Done():
 					return b.ctx.Err()
-				case <-time.After(b.reconnectInterval):
+				case <-time.After(backoffInterval):
 					continue
 				}
 			}
+			
+			// Reset backoff interval upon successful connection
+			backoffInterval = b.backoffConfig.InitialInterval
 			
 			// Start consumers
 			if err := b.startConsumers(); err != nil {
 				b.logger.Printf("Failed to start consumers: %v", err)
 				b.closeConnection()
+				backoffInterval = b.nextBackoff(backoffInterval)
+				b.logger.Printf("Reconnecting in %v", backoffInterval)
 				select {
 				case <-b.ctx.Done():
 					return b.ctx.Err()
-				case <-time.After(b.reconnectInterval):
+				case <-time.After(backoffInterval):
 					continue
 				}
 			}
@@ -221,15 +245,26 @@ func (b *Broker) Start(url string, reconnectInterval time.Duration) error {
 				b.closeConnection()
 				// Wait for consumers to stop before reconnecting
 				b.wg.Wait()
+				backoffInterval = b.nextBackoff(backoffInterval)
+				b.logger.Printf("Reconnecting in %v", backoffInterval)
 				select {
 				case <-b.ctx.Done():
 					return b.ctx.Err()
-				case <-time.After(b.reconnectInterval):
+				case <-time.After(backoffInterval):
 					continue
 				}
 			}
 		}
 	}
+}
+
+// nextBackoff calculates the next backoff interval.
+func (b *Broker) nextBackoff(currentInterval time.Duration) time.Duration {
+	nextInterval := time.Duration(float64(currentInterval) * b.backoffConfig.Multiplier)
+	if nextInterval > b.backoffConfig.MaxInterval {
+		return b.backoffConfig.MaxInterval
+	}
+	return nextInterval
 }
 
 // connect establishes a new connection to the RabbitMQ server.
@@ -254,27 +289,16 @@ func (b *Broker) startConsumers() error {
 		}
 	}
 	
-	errorChan := make(chan error, len(b.consumers))
 	for _, consumer := range b.consumers {
 		b.wg.Add(1)
 		go func(c *Consumer) {
 			defer b.wg.Done()
-			if err := c.start(); err != nil {
-				errorChan <- fmt.Errorf("consumer '%s' stopped: %w", c.name, err)
+			if err := c.run(); err != nil {
+				b.logger.Printf("Consumer '%s' stopped: %v", c.name, err)
 			}
 		}(consumer)
 	}
-	
-	b.wg.Wait()
-	close(errorChan)
-	
-	var err error
-	for e := range errorChan {
-		b.logger.Printf("Error: %v", e)
-		err = e // Capture the last error
-	}
-	
-	return err
+	return nil
 }
 
 // closeConnection closes the AMQP connection.
@@ -417,6 +441,31 @@ func (c *Consumer) QoS(prefetchCount int, opts ...func(*QoSOptions)) *Consumer {
 		opt(&c.qosOpts)
 	}
 	return c
+}
+
+// run manages the consumer's lifecycle, reconnecting on channel closures.
+func (c *Consumer) run() error {
+	backoffInterval := c.broker.backoffConfig.InitialInterval
+	for {
+		select {
+		case <-c.broker.ctx.Done():
+			return nil
+		default:
+			if err := c.start(); err != nil {
+				c.broker.logger.Printf("Consumer '%s' error: %v", c.name, err)
+				backoffInterval = c.broker.nextBackoff(backoffInterval)
+				c.broker.logger.Printf("Consumer '%s' reconnecting in %v", c.name, backoffInterval)
+				select {
+				case <-c.broker.ctx.Done():
+					return nil
+				case <-time.After(backoffInterval):
+					continue
+				}
+			}
+			// Reset backoff interval upon successful channel start
+			backoffInterval = c.broker.backoffConfig.InitialInterval
+		}
+	}
 }
 
 // start initializes the consumer's channel and starts consuming messages.
