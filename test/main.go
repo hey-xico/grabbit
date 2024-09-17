@@ -201,19 +201,19 @@ func recoveryMiddleware(next grabbit.HandlerFunc) grabbit.HandlerFunc {
 }
 
 func fanoutHandler(ctx *grabbit.Context) error {
-	//fmt.Printf("Received message: %s\n", string(ctx.Body()))
+	fmt.Printf("Received message: %s\n", string(ctx.Body()))
 	
 	return nil
 }
 
 func directHandler(ctx *grabbit.Context) error {
-	//fmt.Printf("Received message: %s\n", string(ctx.Body()))
+	fmt.Printf("Received message: %s\n", string(ctx.Body()))
 	return nil
 }
 
 func topicHandler(consumerName string) grabbit.HandlerFunc {
 	return func(ctx *grabbit.Context) error {
-		//fmt.Printf("Received message: %s\n", string(ctx.Body()))
+		fmt.Printf("Received message: %s\n", string(ctx.Body()))
 		
 		return nil
 		
