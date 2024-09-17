@@ -3,7 +3,7 @@ package grabbit
 import (
 	"errors"
 	"fmt"
-	
+
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -85,7 +85,7 @@ func (c *Consumer) start() error {
 	if err != nil {
 		return fmt.Errorf("failed to get connection: %w", err)
 	}
-	
+
 	channel, err := conn.Channel()
 	if err != nil {
 		return fmt.Errorf("failed to open channel: %w", err)
@@ -93,10 +93,10 @@ func (c *Consumer) start() error {
 	defer func() {
 		_ = channel.Close() // Ignoring error since channel is closing
 	}()
-	
+
 	chClosed := make(chan *amqp.Error, 1)
 	channel.NotifyClose(chClosed)
-	
+
 	if c.exchangeOpts.Name != "" {
 		err = channel.ExchangeDeclare(
 			c.exchangeOpts.Name,
@@ -111,7 +111,7 @@ func (c *Consumer) start() error {
 			return fmt.Errorf("failed to declare exchange '%s': %w", c.exchangeOpts.Name, err)
 		}
 	}
-	
+
 	queueName := c.queueOpts.Name
 	if queueName == "" {
 		queueName = c.name
@@ -127,7 +127,7 @@ func (c *Consumer) start() error {
 	if err != nil {
 		return fmt.Errorf("failed to declare queue '%s': %w", queueName, err)
 	}
-	
+
 	if c.exchangeOpts.Name != "" {
 		err = channel.QueueBind(
 			queue.Name,
@@ -140,7 +140,7 @@ func (c *Consumer) start() error {
 			return fmt.Errorf("failed to bind queue '%s' to exchange '%s': %w", queue.Name, c.exchangeOpts.Name, err)
 		}
 	}
-	
+
 	if c.qosOpts.PrefetchCount > 0 {
 		err = channel.Qos(
 			c.qosOpts.PrefetchCount,
@@ -151,7 +151,7 @@ func (c *Consumer) start() error {
 			return fmt.Errorf("failed to set QoS: %w", err)
 		}
 	}
-	
+
 	// Start consuming messages
 	deliveries, err := channel.Consume(
 		queue.Name,
@@ -165,9 +165,9 @@ func (c *Consumer) start() error {
 	if err != nil {
 		return fmt.Errorf("failed to start consuming from queue '%s': %w", queueName, err)
 	}
-	
+
 	handler := c.applyMiddleware(c.handler)
-	
+
 	for {
 		select {
 		case <-c.broker.ctx.Done():
@@ -181,7 +181,7 @@ func (c *Consumer) start() error {
 			if !ok {
 				return errors.New("deliveries channel closed")
 			}
-			
+
 			ctx := &Context{
 				Context:  c.broker.ctx,
 				Delivery: d,
@@ -221,12 +221,12 @@ func (c *Consumer) validateConfig() error {
 			return fmt.Errorf("exchange name cannot be empty")
 		}
 	}
-	
+
 	// Validate Queue Options
 	if c.queueOpts.Name == "" && c.exchangeOpts.Name == "" {
 		return fmt.Errorf("queue name cannot be empty unless bound to an exchange")
 	}
-	
+
 	// Validate Binding Options
 	if c.exchangeOpts.Name != "" {
 		if c.exchangeOpts.Type == HeadersExchange && len(c.bindingOpts.Headers) == 0 {
@@ -236,7 +236,7 @@ func (c *Consumer) validateConfig() error {
 			return fmt.Errorf("routing key cannot be empty for exchange type '%s'", c.exchangeOpts.Type)
 		}
 	}
-	
+
 	return nil
 }
 

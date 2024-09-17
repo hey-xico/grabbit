@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	
+
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -23,7 +23,7 @@ type Broker struct {
 	config        amqp.Config
 	backoffConfig BackoffConfig
 	errorHandler  ErrorHandler
-	
+
 	status      BrokerStatus
 	statusMutex sync.RWMutex
 	StatusChan  chan BrokerStatus
@@ -92,7 +92,7 @@ func (b *Broker) Consumer(name string, handler HandlerFunc) *Consumer {
 func (b *Broker) Start(url string) error {
 	b.url = url
 	backoffInterval := b.backoffConfig.InitialInterval
-	
+
 	for {
 		select {
 		case <-b.ctx.Done():
@@ -101,7 +101,7 @@ func (b *Broker) Start(url string) error {
 			return b.ctx.Err()
 		default:
 			b.setStatus(StatusConnecting)
-			
+
 			// Attempt to connect
 			if err := b.connect(); err != nil {
 				b.handleError(fmt.Errorf("failed to connect: %w", err))
@@ -113,12 +113,12 @@ func (b *Broker) Start(url string) error {
 					continue
 				}
 			}
-			
+
 			// Reset backoff interval upon successful connection
 			backoffInterval = b.backoffConfig.InitialInterval
-			
+
 			b.setStatus(StatusConnected)
-			
+
 			// Start consumers
 			if err := b.startConsumers(); err != nil {
 				b.handleError(fmt.Errorf("failed to start consumers: %w", err))
@@ -132,11 +132,11 @@ func (b *Broker) Start(url string) error {
 					continue
 				}
 			}
-			
+
 			// Monitor connection
 			connClosed := make(chan *amqp.Error, 1)
 			b.conn.NotifyClose(connClosed)
-			
+
 			select {
 			case <-b.ctx.Done():
 				// Application context canceled, initiate shutdown
@@ -198,7 +198,7 @@ func (b *Broker) startConsumers() error {
 			return fmt.Errorf("consumer '%s' configuration error: %w", consumer.name, err)
 		}
 	}
-	
+
 	for _, consumer := range b.consumers {
 		b.wg.Add(1)
 		go func(c *Consumer) {
@@ -223,11 +223,11 @@ func (b *Broker) closeConnection() {
 func (b *Broker) getConnection() (*amqp.Connection, error) {
 	b.connMutex.RLock()
 	defer b.connMutex.RUnlock()
-	
+
 	if b.conn == nil {
 		return nil, errors.New("connection is not available")
 	}
-	
+
 	return b.conn, nil
 }
 
@@ -249,7 +249,7 @@ func (b *Broker) setStatus(status BrokerStatus) {
 	b.statusMutex.Lock()
 	b.status = status
 	b.statusMutex.Unlock()
-	
+
 	// Non-blocking status update to prevent blocking the broker
 	select {
 	case b.StatusChan <- status:
@@ -258,7 +258,7 @@ func (b *Broker) setStatus(status BrokerStatus) {
 		case <-b.StatusChan: // Remove the old status
 		default:
 		}
-		
+
 		select {
 		case b.StatusChan <- status:
 		default:

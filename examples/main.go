@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"time"
-	
+
 	"github.com/hey-xico/grabbit"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -21,7 +21,7 @@ const (
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	broker := grabbit.NewBroker(ctx)
-	
+
 	// Set a custom logger (optional)
 	broker.SetErrorHandler(func(err error) {
 		log.Printf("Broker error: %v", err)
@@ -30,7 +30,7 @@ func main() {
 		InsecureSkipVerify: false,
 		// Provide RootCAs, Certificates, etc.
 	}
-	
+
 	// Listen for connection state changes
 	//go func() {
 	//	for status := range broker.StatusChan {
@@ -44,7 +44,7 @@ func main() {
 	//		}
 	//	}
 	//}()
-	
+
 	// Set the AMQP configuration with TLS
 	amqpConfig := amqp.Config{
 		TLSClientConfig: tlsConfig,
@@ -57,28 +57,28 @@ func main() {
 	})
 	broker.SetConfig(amqpConfig)
 	broker.Use(loggingMiddleware, recoveryMiddleware)
-	
+
 	setupConsumers(broker)
-	
+
 	go func() {
 		if err := broker.Start(rabbitMQURL); err != nil {
 			log.Fatalf("Failed to start broker: %v", err)
 		}
 	}()
-	
+
 	time.Sleep(1 * time.Second)
-	
+
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 	go startPublishing(ctx)
-	
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 	<-c
-	
+
 	log.Println("Shutting down broker...")
 	cancel()
-	
+
 	if err := broker.Shutdown(); err != nil {
 		log.Fatalf("Error during shutdown: %v", err)
 	}
@@ -91,24 +91,24 @@ func setupConsumers(broker *grabbit.Broker) {
 	broker.Consumer("fanoutConsumerB", fanoutHandler).
 		Exchange("fanout_exchange", grabbit.FanoutExchange, grabbit.WithExchangeDurable(true)).
 		Queue("b", grabbit.WithQueueExclusive(true), grabbit.WithQueueAutoDelete(true))
-	
+
 	broker.Consumer("directConsumer", directHandler).
 		Exchange("direct_exchange", grabbit.DirectExchange, grabbit.WithExchangeDurable(true)).
 		Queue("direct_queue", grabbit.WithQueueDurable(true)).
 		Binding("my.routing.key").
 		ConsumerOptions(grabbit.WithConsumerAutoAck(false)).
 		QoS(5)
-	
+
 	broker.Consumer("ConsumerA", topicHandler("A")).
 		Exchange("topic_exchange", grabbit.TopicExchange, grabbit.WithExchangeDurable(true)).
 		Queue("topic_queue_a", grabbit.WithQueueDurable(true)).
 		Binding("logs.a")
-	
+
 	broker.Consumer("ConsumerB", topicHandler("B")).
 		Exchange("topic_exchange", grabbit.TopicExchange, grabbit.WithExchangeDurable(true)).
 		Queue("topic_queue_b", grabbit.WithQueueDurable(true)).
 		Binding("logs.b")
-	
+
 	broker.Consumer("ConsumerAB", topicHandler("AB")).
 		Exchange("topic_exchange", grabbit.TopicExchange, grabbit.WithExchangeDurable(true)).
 		Queue("topic_queue_ab", grabbit.WithQueueDurable(true)).
@@ -126,10 +126,10 @@ func startPublishing(ctx context.Context) {
 		log.Fatalf("Error connecting to RabbitMQ: %v", err)
 	}
 	defer connection.Close()
-	
+
 	ticker := time.NewTicker(messagePublishDelay)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -148,7 +148,7 @@ func publishMessages(connection *amqp.Connection) error {
 		return fmt.Errorf("error creating channel: %w", err)
 	}
 	defer channel.Close()
-	
+
 	messages := []struct {
 		exchange   string
 		routingKey string
@@ -160,7 +160,7 @@ func publishMessages(connection *amqp.Connection) error {
 		{"topic_exchange", "logs.b", "Hello from topic producer B"},
 		{"topic_exchange", "logs.c", "Hello from topic producer C"},
 	}
-	
+
 	for _, msg := range messages {
 		err = channel.Publish(
 			msg.exchange,
@@ -202,7 +202,7 @@ func recoveryMiddleware(next grabbit.HandlerFunc) grabbit.HandlerFunc {
 
 func fanoutHandler(ctx *grabbit.Context) error {
 	fmt.Printf("Received message: %s\n", string(ctx.Body()))
-	
+
 	return nil
 }
 
@@ -214,8 +214,8 @@ func directHandler(ctx *grabbit.Context) error {
 func topicHandler(consumerName string) grabbit.HandlerFunc {
 	return func(ctx *grabbit.Context) error {
 		fmt.Printf("Received message: %s\n", string(ctx.Body()))
-		
+
 		return nil
-		
+
 	}
 }
