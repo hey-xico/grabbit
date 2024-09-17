@@ -23,9 +23,9 @@ func main() {
 	broker := grabbit.NewBroker(ctx)
 	
 	// Set a custom logger (optional)
-	customLogger := log.New(os.Stdout, "grabbit: ", log.LstdFlags)
-	broker.SetLogger(customLogger)
-	// Configure TLS
+	broker.SetErrorHandler(func(err error) {
+		log.Printf("Broker error: %v", err)
+	}) // Configure TLS
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: false,
 		// Provide RootCAs, Certificates, etc.

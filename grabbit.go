@@ -5,7 +5,7 @@
 // - Easy configuration of exchanges, queues, and bindings.
 // - Middleware support for reusable message processing logic.
 // - Context integration for graceful shutdowns.
-// - Customizable logging strategy.
+// - Customizable error handling.
 // - Support for advanced connection settings, including TLS.
 // - Broker state management and metrics tracking.
 package grabbit
@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 	
@@ -86,11 +85,8 @@ type HandlerFunc func(*Context) error
 // MiddlewareFunc defines the middleware function type.
 type MiddlewareFunc func(HandlerFunc) HandlerFunc
 
-// Logger is an interface that represents a logger.
-// It is compatible with the standard library's log.Logger.
-type Logger interface {
-	Printf(format string, v ...any)
-}
+// ErrorHandler is a function type for handling errors.
+type ErrorHandler func(error)
 
 // Consumer represents a message consumer with its configurations.
 type Consumer struct {
@@ -115,9 +111,9 @@ type Broker struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
-	logger        Logger
 	config        amqp.Config
 	backoffConfig BackoffConfig
+	errorHandler  ErrorHandler
 }
 
 // BackoffConfig defines the configuration for exponential backoff.
@@ -139,7 +135,6 @@ func NewBroker(ctx context.Context) *Broker {
 		consumers:   []*Consumer{},
 		ctx:         ctx,
 		cancel:      cancel,
-		logger:      log.Default(), // Use the standard logger by default
 		config:      amqp.Config{}, // Default AMQP config
 		backoffConfig: BackoffConfig{
 			InitialInterval: 1 * time.Second,
@@ -149,12 +144,10 @@ func NewBroker(ctx context.Context) *Broker {
 	}
 }
 
-// SetLogger sets the logger for the broker.
-// Users can provide their own logger that implements the Logger interface.
-func (b *Broker) SetLogger(logger Logger) {
-	if logger != nil {
-		b.logger = logger
-	}
+// SetErrorHandler sets the error handler for the broker.
+// Users can provide their own error handler to process errors from the broker and consumers.
+func (b *Broker) SetErrorHandler(handler ErrorHandler) {
+	b.errorHandler = handler
 }
 
 // SetConfig sets the AMQP configuration for the broker.
@@ -201,9 +194,8 @@ func (b *Broker) Start(url string) error {
 		default:
 			// Attempt to connect
 			if err := b.connect(); err != nil {
-				b.logger.Printf("Failed to connect: %v", err)
+				b.handleError(fmt.Errorf("failed to connect: %w", err))
 				backoffInterval = b.nextBackoff(backoffInterval)
-				b.logger.Printf("Reconnecting in %v", backoffInterval)
 				select {
 				case <-b.ctx.Done():
 					return b.ctx.Err()
@@ -217,10 +209,9 @@ func (b *Broker) Start(url string) error {
 			
 			// Start consumers
 			if err := b.startConsumers(); err != nil {
-				b.logger.Printf("Failed to start consumers: %v", err)
+				b.handleError(fmt.Errorf("failed to start consumers: %w", err))
 				b.closeConnection()
 				backoffInterval = b.nextBackoff(backoffInterval)
-				b.logger.Printf("Reconnecting in %v", backoffInterval)
 				select {
 				case <-b.ctx.Done():
 					return b.ctx.Err()
@@ -240,13 +231,12 @@ func (b *Broker) Start(url string) error {
 				return b.ctx.Err()
 			case err := <-connClosed:
 				if err != nil {
-					b.logger.Printf("Connection closed: %v", err)
+					b.handleError(fmt.Errorf("connection closed: %w", err))
 				}
 				b.closeConnection()
 				// Wait for consumers to stop before reconnecting
 				b.wg.Wait()
 				backoffInterval = b.nextBackoff(backoffInterval)
-				b.logger.Printf("Reconnecting in %v", backoffInterval)
 				select {
 				case <-b.ctx.Done():
 					return b.ctx.Err()
@@ -276,7 +266,6 @@ func (b *Broker) connect() error {
 	b.connMutex.Lock()
 	b.conn = conn
 	b.connMutex.Unlock()
-	b.logger.Printf("Connected to RabbitMQ server")
 	return nil
 }
 
@@ -294,7 +283,7 @@ func (b *Broker) startConsumers() error {
 		go func(c *Consumer) {
 			defer b.wg.Done()
 			if err := c.start(); err != nil {
-				b.logger.Printf("Consumer '%s' stopped: %v", c.name, err)
+				b.handleError(fmt.Errorf("consumer '%s' stopped: %w", c.name, err))
 			}
 		}(consumer)
 	}
@@ -306,11 +295,7 @@ func (b *Broker) closeConnection() {
 	b.connMutex.Lock()
 	defer b.connMutex.Unlock()
 	if b.conn != nil {
-		if err := b.conn.Close(); err != nil {
-			b.logger.Printf("Failed to close AMQP connection: %v", err)
-		} else {
-			b.logger.Printf("AMQP connection closed")
-		}
+		_ = b.conn.Close() // Ignoring error since connection is closing
 		b.conn = nil
 	}
 }
@@ -334,6 +319,13 @@ func (b *Broker) getConnection() (*amqp.Connection, error) {
 	}
 	
 	return b.conn, nil
+}
+
+// handleError processes errors using the user-provided error handler.
+func (b *Broker) handleError(err error) {
+	if b.errorHandler != nil {
+		b.errorHandler(err)
+	}
 }
 
 // applyMiddleware applies the middleware stack to a handler.
@@ -455,9 +447,7 @@ func (c *Consumer) start() error {
 		return fmt.Errorf("failed to open channel: %w", err)
 	}
 	defer func() {
-		if err := channel.Close(); err != nil {
-			c.broker.logger.Printf("Failed to close channel for consumer '%s': %v", c.name, err)
-		}
+		_ = channel.Close() // Ignoring error since channel is closing
 	}()
 	
 	chClosed := make(chan *amqp.Error, 1)
@@ -533,7 +523,6 @@ func (c *Consumer) start() error {
 	}
 	
 	handler := c.applyMiddleware(c.handler)
-	c.broker.logger.Printf("Consumer '%s' started consuming from queue '%s'", c.name, queueName)
 	
 	for {
 		select {
@@ -552,19 +541,19 @@ func (c *Consumer) start() error {
 			ctx := &Context{
 				Context:  c.broker.ctx,
 				Delivery: d,
-				logger:   c.broker.logger,
 			}
 			if err := handler(ctx); err != nil {
 				if !c.consumerOpts.AutoAck {
 					if nackErr := ctx.Nack(false, true); nackErr != nil {
-						c.broker.logger.Printf("Failed to Nack message: %v", nackErr)
+						return fmt.Errorf("failed to Nack message: %w", nackErr)
 					}
 				}
-				c.broker.logger.Printf("Handler error: %v", err)
+				// Return handler error
+				return fmt.Errorf("handler error: %w", err)
 			} else {
 				if !c.consumerOpts.AutoAck {
 					if ackErr := ctx.Ack(false); ackErr != nil {
-						c.broker.logger.Printf("Failed to Ack message: %v", ackErr)
+						return fmt.Errorf("failed to Ack message: %w", ackErr)
 					}
 				}
 			}
@@ -577,7 +566,6 @@ type Context struct {
 	context.Context
 	Delivery amqp.Delivery
 	data     map[string]any
-	logger   Logger
 }
 
 // Ack acknowledges the message, indicating successful processing.
