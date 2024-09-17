@@ -3,7 +3,7 @@ package grabbit
 import (
 	"errors"
 	"fmt"
-	
+
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -85,32 +85,32 @@ func (c *Consumer) start() error {
 		return err
 	}
 	defer closeChannel(channel)
-	
+
 	chCloseNotify := make(chan *amqp.Error, 1)
 	channel.NotifyClose(chCloseNotify)
-	
+
 	if err := c.declareExchange(channel); err != nil {
 		return err
 	}
-	
+
 	queue, err := c.declareQueue(channel)
 	if err != nil {
 		return err
 	}
-	
+
 	if err := c.bindQueue(channel, queue); err != nil {
 		return err
 	}
-	
+
 	if err := c.setupQoS(channel); err != nil {
 		return err
 	}
-	
+
 	deliveries, err := c.startConsuming(channel, queue)
 	if err != nil {
 		return err
 	}
-	
+
 	handler := c.applyMiddleware(c.handler)
 	return c.processMessages(deliveries, handler, chCloseNotify)
 }
@@ -121,12 +121,12 @@ func (c *Consumer) setupChannel() (*amqp.Channel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connection: %w", err)
 	}
-	
+
 	channel, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open channel: %w", err)
 	}
-	
+
 	return channel, nil
 }
 
@@ -142,7 +142,7 @@ func (c *Consumer) declareExchange(channel *amqp.Channel) error {
 	if c.exchangeOpts.Name == "" {
 		return nil
 	}
-	
+
 	err := channel.ExchangeDeclare(
 		c.exchangeOpts.Name,
 		string(c.exchangeOpts.Type),
@@ -155,7 +155,7 @@ func (c *Consumer) declareExchange(channel *amqp.Channel) error {
 	if err != nil {
 		return fmt.Errorf("failed to declare exchange '%s': %w", c.exchangeOpts.Name, err)
 	}
-	
+
 	return nil
 }
 
@@ -165,7 +165,7 @@ func (c *Consumer) declareQueue(channel *amqp.Channel) (amqp.Queue, error) {
 	if queueName == "" {
 		queueName = c.name
 	}
-	
+
 	queue, err := channel.QueueDeclare(
 		queueName,
 		c.queueOpts.Durable,
@@ -177,7 +177,7 @@ func (c *Consumer) declareQueue(channel *amqp.Channel) (amqp.Queue, error) {
 	if err != nil {
 		return amqp.Queue{}, fmt.Errorf("failed to declare queue '%s': %w", queueName, err)
 	}
-	
+
 	return queue, nil
 }
 
@@ -186,7 +186,7 @@ func (c *Consumer) bindQueue(channel *amqp.Channel, queue amqp.Queue) error {
 	if c.exchangeOpts.Name == "" {
 		return nil
 	}
-	
+
 	err := channel.QueueBind(
 		queue.Name,
 		c.bindingOpts.RoutingKey,
@@ -197,7 +197,7 @@ func (c *Consumer) bindQueue(channel *amqp.Channel, queue amqp.Queue) error {
 	if err != nil {
 		return fmt.Errorf("failed to bind queue '%s' to exchange '%s': %w", queue.Name, c.exchangeOpts.Name, err)
 	}
-	
+
 	return nil
 }
 
@@ -206,7 +206,7 @@ func (c *Consumer) setupQoS(channel *amqp.Channel) error {
 	if c.qosOpts.PrefetchCount <= 0 && c.qosOpts.PrefetchSize <= 0 {
 		return nil
 	}
-	
+
 	err := channel.Qos(
 		c.qosOpts.PrefetchCount,
 		c.qosOpts.PrefetchSize,
@@ -215,7 +215,7 @@ func (c *Consumer) setupQoS(channel *amqp.Channel) error {
 	if err != nil {
 		return fmt.Errorf("failed to set QoS: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -233,7 +233,7 @@ func (c *Consumer) startConsuming(channel *amqp.Channel, queue amqp.Queue) (<-ch
 	if err != nil {
 		return nil, fmt.Errorf("failed to start consuming from queue '%s': %w", queue.Name, err)
 	}
-	
+
 	return deliveries, nil
 }
 
@@ -252,7 +252,7 @@ func (c *Consumer) processMessages(deliveries <-chan amqp.Delivery, handler Hand
 			if !ok {
 				return errors.New("deliveries channel closed")
 			}
-			
+
 			ctx := &Context{
 				Context:  c.broker.ctx,
 				Delivery: d,
@@ -265,7 +265,7 @@ func (c *Consumer) processMessages(deliveries <-chan amqp.Delivery, handler Hand
 				}
 				return fmt.Errorf("handler error: %w", err)
 			}
-			
+
 			if !c.consumerOpts.AutoAck {
 				if ackErr := ctx.Ack(false); ackErr != nil {
 					return fmt.Errorf("failed to Ack message: %w", ackErr)
@@ -280,15 +280,15 @@ func (c *Consumer) validateConfig() error {
 	if err := c.validateExchange(); err != nil {
 		return err
 	}
-	
+
 	if err := c.validateQueue(); err != nil {
 		return err
 	}
-	
+
 	if err := c.validateBinding(); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -297,18 +297,18 @@ func (c *Consumer) validateExchange() error {
 	if c.exchangeOpts.Name == "" {
 		return nil
 	}
-	
+
 	validExchangeTypes := map[ExchangeType]bool{
 		DirectExchange:  true,
 		FanoutExchange:  true,
 		TopicExchange:   true,
 		HeadersExchange: true,
 	}
-	
+
 	if !validExchangeTypes[c.exchangeOpts.Type] {
 		return fmt.Errorf("invalid exchange type '%s' for exchange '%s'", c.exchangeOpts.Type, c.exchangeOpts.Name)
 	}
-	
+
 	return nil
 }
 
@@ -317,11 +317,11 @@ func (c *Consumer) validateQueue() error {
 	if c.queueOpts.Name != "" {
 		return nil
 	}
-	
+
 	if c.exchangeOpts.Name == "" {
 		return errors.New("queue name cannot be empty unless bound to an exchange")
 	}
-	
+
 	return nil
 }
 
@@ -330,7 +330,7 @@ func (c *Consumer) validateBinding() error {
 	if c.exchangeOpts.Name == "" {
 		return nil
 	}
-	
+
 	switch c.exchangeOpts.Type {
 	case HeadersExchange:
 		if len(c.bindingOpts.Headers) == 0 {
@@ -345,7 +345,7 @@ func (c *Consumer) validateBinding() error {
 	default:
 		return fmt.Errorf("unsupported exchange type '%s'", c.exchangeOpts.Type)
 	}
-	
+
 	return nil
 }
 
