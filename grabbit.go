@@ -103,7 +103,6 @@ type Consumer struct {
 	broker       *Broker
 	middlewares  []MiddlewareFunc
 	name         string
-	statsMutex   sync.RWMutex
 }
 
 // Broker represents the message broker that manages connections and consumers.
@@ -119,7 +118,6 @@ type Broker struct {
 	wg                sync.WaitGroup
 	logger            Logger
 	config            amqp.Config
-	statusMutex       sync.RWMutex
 }
 
 // NewBroker creates a new Broker instance with the provided application context.
@@ -249,16 +247,18 @@ func (b *Broker) connect() error {
 
 // startConsumers initializes and starts all consumers managed by the broker.
 func (b *Broker) startConsumers() error {
-	errorChan := make(chan error, len(b.consumers))
+	// Validate configurations
+	for _, consumer := range b.consumers {
+		if err := consumer.validateConfig(); err != nil {
+			return fmt.Errorf("consumer '%s' configuration error: %w", consumer.name, err)
+		}
+	}
 	
+	errorChan := make(chan error, len(b.consumers))
 	for _, consumer := range b.consumers {
 		b.wg.Add(1)
 		go func(c *Consumer) {
 			defer b.wg.Done()
-			if err := c.validateConfig(); err != nil {
-				errorChan <- fmt.Errorf("consumer '%s' configuration error: %w", c.name, err)
-				return
-			}
 			if err := c.start(); err != nil {
 				errorChan <- fmt.Errorf("consumer '%s' stopped: %w", c.name, err)
 			}
@@ -282,9 +282,12 @@ func (b *Broker) closeConnection() {
 	b.connMutex.Lock()
 	defer b.connMutex.Unlock()
 	if b.conn != nil {
-		_ = b.conn.Close()
+		if err := b.conn.Close(); err != nil {
+			b.logger.Printf("Failed to close AMQP connection: %v", err)
+		} else {
+			b.logger.Printf("AMQP connection closed")
+		}
 		b.conn = nil
-		b.logger.Printf("AMQP connection closed")
 	}
 }
 
@@ -427,7 +430,11 @@ func (c *Consumer) start() error {
 	if err != nil {
 		return fmt.Errorf("failed to open channel: %w", err)
 	}
-	defer channel.Close()
+	defer func() {
+		if err := channel.Close(); err != nil {
+			c.broker.logger.Printf("Failed to close channel for consumer '%s': %v", c.name, err)
+		}
+	}()
 	
 	chClosed := make(chan *amqp.Error, 1)
 	channel.NotifyClose(chClosed)
@@ -510,12 +517,12 @@ func (c *Consumer) start() error {
 			return nil
 		case err, ok := <-chClosed:
 			if !ok || err == nil {
-				return errors.New("channel closed")
+				return errors.New("channel closed unexpectedly")
 			}
 			return fmt.Errorf("channel closed: %w", err)
 		case d, ok := <-deliveries:
 			if !ok {
-				return errors.New("message channel closed")
+				return errors.New("deliveries channel closed")
 			}
 			
 			ctx := &Context{
